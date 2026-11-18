@@ -1,65 +1,54 @@
 ---
 name: bcc
-description: 包拆拆 skill —— 把视频拆成剧本(docx/md/html)、分镜表(xlsx/html)或风格指南(md)，与原版包拆拆功能一致。当用户提供视频文件并要求「拆剧本/生成分镜/分镜表/storyboard/风格研究/风格指南」，或提到 bcc / 包拆拆 / XLB Storyboard 时使用。自包含：CLI 已随 skill 分发且不调用任何外部模型 API，分析由你（Agent）用自己的模型完成——剧本要求模型支持原生视频输入（如 Kimi K3），分镜走切镜+关键帧管线。渐进式披露：详细规范在 references/ 下按需加载。
+description: 把视频拆成剧本、分镜表或风格指南。用户提供视频并要求拆剧本、台词、storyboard、分镜或风格研究，或明确使用 bcc / 包拆拆时使用。自带 CLI，可通过 Google 官方 Gemini API 调用用户指定模型分析视频画面与音轨，并导出 docx/xlsx/html；也保留用户明确选择的宿主 Agent 分析方式。
 ---
 
-# bcc — 包拆拆（给 Agent 的自包含 skill）
+# bcc — 视频分析与成品导出
 
-本 skill 自带纯 Node CLI（`bin/bcc.cjs`，位于本 skill 目录内）：视频探测、切镜（smart/scene 多方案）、抽关键帧、成品组装（docx/xlsx/html）。**分析由你自己完成**：CLI 只做视频处理与组装，不调用任何外部模型 API。
+## 输入与模式
 
-安装：`npx skills add aixlb/bcc --skill bcc`。源码、桌面版和 npm CLI 都在同一个 MIT 仓库：https://github.com/aixlb/bcc 。DSH 用户使用独立插件：https://github.com/aixlb/dsh-bcc 。
+输入为本地视频、任务类型、输出位置，以及用户指定的模型（如有）。CLI 入口位于本文件同级 `bin/bcc.cjs`，无需另装桌面版或 npm CLI。提交、部署时必须保留完整 `bin/`（含 `.mjs` 运行块），不能只复制入口；生成文件不手工编辑，改 TypeScript 源码后运行 `npm run build:skill` 重建。
 
-## 渐进式披露：先读规范，再动手
+- **Gemini API 模式（本 fork 的默认流程）**：Agent 调度 CLI，`analyze` 把视频交给 Google 官方 API。宿主 Agent 不需要原生视频能力。用户给出模型 ID 时必须传 `--model`；未指定时读取宿主环境变量 `GEMINI_MODEL` 并告知实际模型，不自行替换。
+- **宿主 Agent 模式**：仅在用户明确选择时使用 `probe` / `shots` / `master` / `export`，由宿主分析。必须确认宿主确实能接收视频及音轨；只有看图能力时，不能声称已听取对白或音效。
+- 指定模型/API 调用失败时停止并报告原因，不自动换模型、换供应商、改看图片或用宿主补写。
 
-**本文件只讲「是什么、怎么调 CLI」。开工前必须先读任务对应的详细规范（与本文件同目录），并严格按其执行**——那里有质量铁律与完整工作流，是产出的合格线：
+## 前置与配置
 
-| 用户要什么 | 先读 | 后执行 |
-|-----------|------|--------|
-| 剧本 / 台词 / 对白 | `references/script.md` | 直接看原视频 → 写剧本 md → `export script` |
-| 分镜 / storyboard / 逐镜头 | `references/storyboard.md` | `shots --frames-dir` → 逐镜看关键帧 → `export storyboard` |
-| 多条视频要风格 / 调性 / 指南 | `references/research.md` | 看原视频 → 直接写风格指南 md |
+1. Node.js 20+；首次处理视频会解析或下载 ffmpeg/ffprobe，网络受限时可传 `--ffmpeg-path` / `--ffprobe-path`。
+2. API 模式先读 `reference.md` 的“Gemini 视频分析”部分，检查宿主 Agent 的 `GEMINI_API_KEY` 与 `GEMINI_MODEL` 环境变量是否可用，不输出密钥值。`analyze` 不读取或创建本地配置文件；缺少 Key 或模型时停止并明确报告对应变量名。模型可由用户明确指定的 `--model` 单次覆盖。
+3. 本地 `probe` / `shots` / `export` 必须带 `--no-config`，避免初始化本地配置；`master` 本身不读配置。代理与 ffmpeg 路径沿用宿主环境变量。
+4. Google 官方 API 与宿主订阅是独立调用。确认用户任务允许把输入视频交给所选 API；用户已明确指定该调用方式时沿用授权。
 
-不相关的规范文件**不要读**，避免指令噪音。
+## 执行流程
 
-## 前置
+按任务只读取对应规范，然后完成分析、结果检查、导出：
 
-1. Node.js 20+（`node --version` 确认）。
-2. 首次处理视频会自动下载 ffmpeg/ffprobe 到本机缓存（仅一次；进度在 stderr）。网络受限：`--ffmpeg-path`/`--ffprobe-path` 或 `HTTPS_PROXY`。
-3. 模型要求：拆剧本需**原生视频输入**（如 Kimi K3）；拆分镜需**看图**。不满足就明确告知用户「当前模型无法使用此技能」，不要假装完成。
-
-## CLI 位置与调用
-
-CLI = SKILL.md 同级目录下的 `bin/bcc.cjs`：
-
-```bash
-BCC="/abs/path/to/skill/bin/bcc.cjs"        # bash
-node "$BCC" probe ./a.mp4
-```
-```powershell
-$BCC = "C:\abs\path\to\skill\bin\bcc.cjs"   # PowerShell
-node $BCC probe .\a.mp4
-```
-
-## 机器契约（铁律）
-
-- **stdout 只出机器结果**：`probe`/`shots`/`master --list` 出 JSON；`export` 出产物绝对路径（每行一个）；`master <id>` 出方法论文本。
-- **stderr 是进度/诊断**，解析结果时忽略；**退出码** 0 成功 / 1 失败（失败信息形如 `失败: ...` / `错误: ...`）。用退出码判断成败，不解析 stderr 文案。
-
-## 快速参考（细节以 references/*.md 为准）
+| 任务 | 读取 | API 分析结果 | 成品 |
+|---|---|---|---|
+| 剧本 / 台词 | `references/script.md` | `analyze --task script` → md | `export script` → docx/md/txt/html |
+| 分镜 / storyboard | `references/storyboard.md` | `analyze --task storyboard` → json | `export storyboard` → xlsx/html |
+| 风格研究 | `references/research.md` | `analyze --task research` → md | md 即成品 |
 
 ```bash
-node "$BCC" probe <视频>                                   # 时长/分辨率 → JSON
-node "$BCC" shots <视频> --no-frames                       # 镜头时间轴（拆剧本校准用）
-node "$BCC" shots <视频> --frames-dir <dir>                # 切镜+关键帧（拆分镜用）
-node "$BCC" master shanzhiyin --kind script|storyboard     # 大师方法论
-node "$BCC" export script --from 剧本.md --out 剧本.docx --format docx,md,html --video <视频>
-node "$BCC" export storyboard --from 分镜.json --out 分镜.xlsx --format xlsx,html --video <视频>
+BCC="/abs/path/to/skills/bcc/bin/bcc.cjs"
+node "$BCC" analyze ./a.mp4 --task script --out ./剧本.md
+node "$BCC" export script --from ./剧本.md --out ./剧本.docx --video ./a.mp4 --no-config
 ```
 
-## 决策提示
+PowerShell 使用 `$BCC = "C:\abs\path\to\skills\bcc\bin\bcc.cjs"` 和 `node $BCC ...`。
 
-- 单个视频要「剧本/台词」→ script 规范；要「分镜表/storyboard」→ storyboard 规范；多条视频要「风格」→ research 规范。
-- 报「下载 ffmpeg 失败」→ 设 `HTTPS_PROXY` 或传 `--ffmpeg-path`/`--ffprobe-path`。
-- 报「找不到视频文件」→ 传存在的绝对路径。
+## 职能边界
 
-完整参数表、JSON 字段、环境变量与故障排查见 **reference.md**。
+- `analyze` 固定调用 Google 官方 Gemini API；`--model` 仅覆盖本次模型，不修改持久配置。
+- 分镜使用本地算法确定时间区间，模型分析视频；导出时才按需生成缩略图。抽缩略图不代表分析输入是图片。
+- 剧本复用核心视频管线，超过 200 MB 会压缩并保留音轨，超过两小时会分段；分镜/风格直接上传所给视频文件。API 的文件、上下文和输出限制仍适用，失败时报告限制，不交付伪完整结果。
+- 原 `storyboard` / `research` API 命令仍是图片管线，不能用它们代替本技能的视频分析入口。
+
+## 验证与汇报
+
+按退出码判成功：0 成功，1 失败。stdout 为 `analyze` / `export` 的产物绝对路径，`probe` / `shots` / `master --list` 的 JSON，或 `master <id>` 的方法论文本；进度和诊断在 stderr。
+
+检查任务对应的结果完整性，不能只检查文件存在。汇报实际模型、分析输入为视频、是否含音轨、压缩/分段情况（如有）及产物路径；未经实际观看或核验，不声称逐句准确或完全无遗漏。
+
+失败时按 `reference.md` 排查。保留错误和未完成状态；不得把已有旧文件当作本次成功产物。

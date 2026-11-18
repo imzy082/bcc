@@ -109,7 +109,7 @@ test/
 # Local migration inputs
 .repo-inspection/
 
-# skills/bcc/bin/bcc.cjs is versioned for self-contained skill installs.
+# skills/bcc/bin/ is versioned in full for self-contained skill installs.
 
 cli-dist/LICENSE
 cli-dist/THIRD_PARTY_NOTICES.md

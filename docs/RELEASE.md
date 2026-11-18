@@ -13,7 +13,7 @@ node out/cli/index.mjs --version
 node skills/bcc/bin/bcc.cjs --version
 ```
 
-`check` 执行类型检查、测试、桌面构建、CLI 构建与 skill 构建。检查 `skills/bcc/bin/bcc.cjs` 的变更，将它和源码一起提交。`publish:skill` 仅是 `build:skill` 的本地兼容入口，不再创建提交或向其他仓库推送。
+`check` 执行类型检查、测试、桌面构建、CLI 构建与 skill 构建。检查完整 `skills/bcc/bin/`（入口及所有 `.mjs` 块）的变更，与源码一起提交；不能只提交或部署 `bcc.cjs`。提交后可运行 `node scripts/check-skill-generated.mjs` 检查是否遗漏变更或新生成块。`publish:skill` 仅是 `build:skill` 的本地兼容入口，不再创建提交或向其他仓库推送。
 
 ## 2. 打包与验证桌面版
 

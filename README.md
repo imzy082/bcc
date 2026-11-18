@@ -10,7 +10,7 @@ Created by **@玩AI的小笼包**。桌面应用名称为 **XLB Storyboard**。
 |---|---|---|
 | 桌面版 | 预览视频、编辑剧本与分镜、导出成品 | [下载 Releases](https://github.com/aixlb/bcc/releases) |
 | CLI `bcc` | 批量处理、脚本与自动化 | `npm i -g @aixlb/bcc`，需要 Node.js 20+ |
-| Agent skill | 在 Agent 中分析视频，调用本地工具处理素材与导出 | `npx skills add aixlb/bcc --skill bcc` |
+| Agent skill | Agent 调度指定 Gemini 模型分析视频，调用本地工具导出 | 本仓库的 [skills/bcc](skills/bcc/SKILL.md) 目录 |
 | DSH 插件 | 在 DSH 中使用会话模型和插件界面 | 独立仓库 [aixlb/dsh-bcc](https://github.com/aixlb/dsh-bcc) |
 
 ## 能做什么
@@ -61,13 +61,13 @@ bcc export storyboard --from 分镜.json --out 分镜.xlsx --video a.mp4
 
 ## Agent skill
 
-```bash
-npx skills add aixlb/bcc --skill bcc
-```
+使用本仓库的完整 `skills/bcc/` 目录（包含 `bin/` 和 `references/`）。从 `aixlb/bcc` 安装的是上游版本，不包含本 fork 新增的 Gemini 视频分析入口；本地修改尚未推送时，以本地目录为准。
 
-skill 位于 [skills/bcc](skills/bcc/SKILL.md)，随仓库提交自包含的 `bin/bcc.cjs`，无需另装 npm CLI。工作流、质量要求及 JSON 契约在 skill 的 `references/` 中按需加载。
+skill 位于 [skills/bcc](skills/bcc/SKILL.md)，随仓库提交自包含的完整 `bin/`，入口仍是 `bin/bcc.cjs`，无需另装 npm CLI。工作流、质量要求及 JSON 契约在 skill 的 `references/` 中按需加载。
 
-拆剧本需要 Agent 的模型支持相应视频输入；拆分镜可用关键帧分析。skill 不替 Agent 提供模型服务。DSH 用户也可选择有独立界面的 [dsh-bcc 插件](https://github.com/aixlb/dsh-bcc)。
+`bin/bcc.cjs` 是小型启动入口，依赖与功能代码拆在同目录的 `.mjs` 块中；部署、提交时保留整个 `bin/`，不能只复制入口。生成文件不应手工编辑或格式化；功能修改应在 `apps/bcc-cli/src/` 或 `packages/bcc-core/src/` 完成，再运行 `npm run build:skill`。构建保留函数/类名和许可声明，每个块限制在 512 KiB 内，并限制代码行长度。
+
+本 fork 的 skill 默认通过 Google 官方 Gemini API 分析视频与音轨，支持用 `analyze --model <模型ID>` 指定模型；由宿主 Agent 环境提供 `GEMINI_API_KEY` 和 `GEMINI_MODEL`，无需本地配置文件，宿主负责调度。剧本、分镜和风格研究的结果沿用现有导出格式。用户明确选择宿主 Agent 模式时，仍需宿主实际支持视频与音轨输入。DSH 用户也可选择有独立界面的 [dsh-bcc 插件](https://github.com/aixlb/dsh-bcc)。
 
 ## 开发
 
@@ -100,7 +100,7 @@ cli-dist/                npm CLI 包，构建时生成运行文件
 | `npm run check` | 类型检查、测试、桌面构建、CLI 构建、skill 构建 |
 | `npm run build` | 桌面版编译到 `out/` |
 | `npm run build:cli` | CLI 编译到 `out/cli/index.mjs` |
-| `npm run build:skill` | 重建 `skills/bcc/bin/bcc.cjs`，随源码一起提交 |
+| `npm run build:skill` | 重建完整 `skills/bcc/bin/`，随源码一起提交 |
 | `npm run build:publish` | 生成 `@aixlb/bcc` npm 包到 `cli-dist/` |
 | `npm run dist:win` / `npm run dist:mac` | 在对应平台打包到 `release/` |
 | `npm run publish:app` | 上传当前版本桌面包到本仓库 Release |

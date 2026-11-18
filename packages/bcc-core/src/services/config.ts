@@ -64,6 +64,11 @@ function getConfigPath(): string {
 
 let cachedConfig: AppConfig | null = null
 
+/** 无状态的默认配置副本，供不读写配置文件的宿主使用。 */
+export function createDefaultConfig(): AppConfig {
+  return deepClone(DEFAULT_CONFIG)
+}
+
 export async function loadConfig(): Promise<AppConfig> {
   if (cachedConfig) return cachedConfig
 

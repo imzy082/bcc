@@ -21,6 +21,7 @@ export {
 // ---------- 配置 ----------
 export {
   loadConfig,
+  createDefaultConfig,
   saveConfig,
   getConfig,
   getConfigFilePath,

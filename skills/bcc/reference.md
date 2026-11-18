@@ -1,7 +1,8 @@
-# bcc 命令参考（Agent 模式）
+# bcc 命令参考
 
 CLI 路径：`<skill目录>/bin/bcc.cjs`。所有命令用 `node "<path>/bcc.cjs" <命令> ...` 调用。
-需要 Node 20+；CLI 已随 skill 分发、无外部依赖。所有分析由 Agent 自己的模型完成（CLI 不调用任何外部模型 API）。
+`bcc.cjs` 是小型入口，必须与同目录的全部 `.mjs` 运行块一起部署；缺块时重新部署完整 `bin/`。这些文件由构建生成，不手工编辑或格式化。
+需要 Node 20+；CLI 已随 skill 分发。`analyze` 调用 Google 官方 Gemini API；`probe` / `shots` / `master` / `export` 是不调用模型的本地工具。
 
 > **任务级详细规范（渐进式披露，开工前必读对应文件）**：
 > `references/script.md`（拆剧本）、`references/storyboard.md`（拆分镜）、`references/research.md`（风格研究）。
@@ -11,14 +12,56 @@ CLI 路径：`<skill目录>/bin/bcc.cjs`。所有命令用 `node "<path>/bcc.cjs
 
 | 项 | 约定 |
 |----|------|
-| stdout | 机器结果：`probe`/`shots`/`master --list` 出 JSON（单行）；`export` 出产物绝对路径（每行一个）；`master <id>` 出方法论文本 |
+| stdout | 机器结果：`probe`/`shots`/`master --list` 出 JSON（单行）；`analyze`/`export` 出产物绝对路径（每行一个）；`master <id>` 出方法论文本 |
 | stderr | 进度 / 诊断（含 ffmpeg/ffprobe 下载进度与来源日志） |
 | 退出码 | 0 成功；1 失败（用法错误前缀 `错误:`，运行失败前缀 `失败:`） |
+
+## Gemini 视频分析
+
+由调用 skill 的 Agent 环境提供以下变量，无需本地配置文件：
+
+| 变量 | 用途 |
+|---|---|
+| `GEMINI_API_KEY` | Google 官方 API Key，必需；不落盘、不输出其值 |
+| `GEMINI_MODEL` | 默认模型 ID；用户显式提供 `--model` 时仅覆盖本次 |
+| `HTTPS_PROXY` / `HTTP_PROXY` | 可选网络代理；沿用宿主环境，不被空配置清除 |
+
+```bash
+node "$BCC" analyze <视频> --task script --out 剧本.md
+node "$BCC" analyze <视频> --task storyboard --out 分镜.json
+node "$BCC" analyze <视频1> <视频2> --task research --out 风格指南.md
+# 仅在用户明确指定另一个模型时覆盖：
+node "$BCC" analyze <视频> --task script --model <模型ID> --out 剧本.md
+```
+
+- `--task`、`--out` 必填；剧本/分镜只接受一个视频，研究至少一个；仅支持本地文件。
+- 模型优先级为显式 `--model` > `GEMINI_MODEL`，没有本地文件或内置模型回退。Key 缺失或模型未指定时退出 1，不调用 API。
+- 模型必须支持当前请求的视频输入，分镜还需 JSON schema 输出；不支持时报告 API 错误，不自动换模型。
+- `--master` 用于剧本/分镜，缺省不注入大师附录；`default` 明确不注入。研究不接受此参数。
+- 公共参数：`--quiet`、`--verbose`、`--ffmpeg-path`、`--ffprobe-path`。`analyze` 不支持 `--data-dir`，不读写 `config.yaml`，也不初始化或迁移项目库。
+- 非认证参数使用核心内置默认值；不会读取本地保存的大师、代理、分镜或研究配置。
+- 剧本输出 md，分镜输出 `{shots, durationSec}` JSON，研究输出 md。docx/xlsx/html 使用 `export --no-config` 生成。
+- stderr 显示实际 `provider=gemini model=... input=video`。API 失败、输出截断、分镜数量或字段错误时退出 1，不写本次结果，也不回退图片模式。
+- 上传后等待视频处理最多 10 分钟；任务结束尝试删除上传文件。分镜/研究入口清理失败会报告服务端文件名；剧本沿用既有后台清理，不能把清理请求当作已确认删除。
+- 分镜/研究直接上传原视频；多视频研究在同一次请求中综合全部视频。超出服务端限制时减少单次素材或在用户认可后分段，不静默漏掉输入。
+
+Skill 调用 `probe` / `shots` / `export` 时必须加 `--no-config`，整个工作流均不读取或创建配置文件。旧 CLI 用法不加该参数时仍保留原配置行为；不能把旧用法误用于此 skill 的无配置流程。`master` 无需该参数。
+
+### API 异常处置
+
+| 情况 | 处理 |
+|---|---|
+| 缺少 Key | 请用户在 Agent 环境设置 `GEMINI_API_KEY`，不索取聊天中的明文密钥 |
+| 缺少模型 | 在 Agent 环境设置 `GEMINI_MODEL`，或按用户明确要求传 `--model` |
+| 认证/模型不可用/不支持视频或 schema | 核对官方 Key、模型 ID 和权限；报告错误，不自行换模型 |
+| 网络失败 | 检查宿主 `HTTPS_PROXY` / `HTTP_PROXY` 与 Google 官方服务连通性 |
+| 视频处理失败/超时/上下文或输出超限 | 报告具体错误；在用户认可后缩短或拆分视频，不改用图片猜测 |
+| 源视频无音轨 | 明确说明素材无音轨，不能补造对白或音效 |
 
 ## bcc probe
 
 ```
-node bcc.cjs probe <video>
+node bcc.cjs probe <video> --no-config
 ```
 
 输出单行 JSON（字段与 `bcc shots` 的 video 信息一致）：
@@ -33,7 +76,7 @@ node bcc.cjs probe <video>
 ## bcc shots（核心）
 
 ```
-node bcc.cjs shots <video> [--no-frames|--frames-dir <dir>] [--cut-method smart|scene]
+node bcc.cjs shots <video> --no-config [--no-frames|--frames-dir <dir>] [--cut-method smart|scene]
                            [--threshold 0.3] [--hard-min 5.5] [--hard-ratio 8] [--min-gap 0.3]
                            [--max-shots 200] [--quiet]
 ```
@@ -76,7 +119,7 @@ node bcc.cjs shots <video> [--no-frames|--frames-dir <dir>] [--cut-method smart|
 - `scene`：经典帧差阈值法。`--threshold`（默认 0.3，0~1）。
 - `--max-shots` 上限（默认 200，读配置 `storyboard.max_shots`）。
 
-缺省参数读 `config.yaml` 的 `storyboard.*`（与桌面端/CLI 共用一份配置）。
+`--no-config` 下缺省参数使用核心内置默认值，可用命令参数调节；仅旧 CLI 未带此参数时读取本地 `storyboard.*`。
 
 ## bcc master
 
@@ -92,8 +135,8 @@ node bcc.cjs master <id|名称> [--kind script|storyboard]
 ## bcc export
 
 ```
-node bcc.cjs export script --from <剧本.md> --out <out> [--format docx,md,txt,html] [--video <视频>] [--name 名称]
-node bcc.cjs export storyboard --from <分镜.json> --out <out> [--format xlsx,html] [--video <视频>] [--name 名称]
+node bcc.cjs export script --no-config --from <剧本.md> --out <out> [--format docx,md,txt,html] [--video <视频>] [--name 名称]
+node bcc.cjs export storyboard --no-config --from <分镜.json> --out <out> [--format xlsx,html] [--video <视频>] [--name 名称]
 ```
 
 `--out` 给文件名按扩展名定格式；给目录用默认文件名；`--format a,b` 批量出多份。stdout 每行一个产物绝对路径。
@@ -112,7 +155,7 @@ node bcc.cjs export storyboard --from <分镜.json> --out <out> [--format xlsx,h
 | `shotType` | 否 | 特写/近景/中景/全景/大全景/远景 |
 | `angle` | 否 | 平视/俯视/仰视/顶拍… |
 | `cameraMove` | 否 | 固定/推/拉/摇/移/跟/手持… |
-| `description` | 否 | 七行提示词描述（画面主体/人物动作与表情/环境与背景/光线与色彩/构图与景深/道具细节/风格与氛围） |
+| `description` | 否 | 七行提示词描述（风格限定/景别/视角构图/主体描述/背景设定/细节修饰/光影色调） |
 | `dialogue` / `sound` | 否 | 台词 / 音效 |
 | `startSec` | 是 | 镜起点（秒） |
 | `endSec` | 否 | 镜终点；缺省=下一镜 startSec 或 durationSec |
@@ -151,7 +194,7 @@ xlsx 列：镜号/景别/角度/运镜/关键帧(嵌图)/时长/提示词描述/
 
 ## 与桌面端 / npm CLI 的关系
 
-- 桌面端「包拆拆 / XLB Storyboard」与 npm 包 `@aixlb/bcc` 是同一产品线的另两种形态：它们内置模型调用（需配置 API Key），能力与产物格式与本 skill 一致（剧本 docx/md、分镜 xlsx/html、风格指南 md）。
-- 本 skill 的 CLI 不调用任何外部模型 API，**分析完全由使用本 skill 的 Agent 自己的模型完成**；CLI 提供 `probe`/`shots`/`master`/`export` 四个无模型原语支撑工作流。
-- **模型要求**：拆剧本需**原生视频输入**（如 Kimi K3，直接看原视频听对白）；拆分镜按原版管线**看关键帧**分析（支持原生视频的模型可另看原视频段核对运镜）。两者都不支持的模型无法使用本 skill，如实告知用户。
-- 产物互通：`export` 生成的 docx/xlsx/html 与桌面端/npm 版格式相同；`shots` 的切镜参数与其 `storyboard.*` 配置共用。
+- skill 的完整 `bin/` 包含全部 CLI 运行文件，入口为 `bin/bcc.cjs`，无需另装桌面版或 npm 包。
+- `analyze` 是本 fork 的指定 Gemini 视频分析入口，独立于 `script_provider` / `storyboard_provider`；同一二进制中的旧 API 管线命令仍保留。
+- 用户明确选择宿主 Agent 模式时，才用本地工具组合；宿主必须能实际接收视频与音轨，模型名称本身不能证明宿主接口具备这种能力。
+- 成品沿用现有 `export` 格式；模型输出的分镜 description 与核心共享七项标签：风格限定、景别、视角构图、主体描述、背景设定、细节修饰、光影色调。

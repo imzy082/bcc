@@ -12,6 +12,7 @@ import type { AppConfig } from '@shared/types'
 import {
   setDataRoot,
   loadConfig,
+  createDefaultConfig,
   applyProxyEnv,
   installGlobalFetch,
   migrateLegacyResearchDir,
@@ -48,6 +49,8 @@ export function resolveDataRoot(explicit?: string): string {
 }
 
 export interface BootstrapOptions {
+  /** skill 无配置模式：不解析数据目录、不迁移、不读写配置、不覆盖环境代理。 */
+  noConfig?: boolean
   dataDir?: string
   /** 是否装配全局 fetch / 代理（拆剧本/分镜/研究等联网命令需要；纯 config 读写不需要） */
   network?: boolean
@@ -57,10 +60,15 @@ export interface BootstrapOptions {
 
 export interface CliContext {
   config: AppConfig
-  dataRoot: string
+  dataRoot?: string
 }
 
 export async function bootstrap(opts: BootstrapOptions = {}): Promise<CliContext> {
+  if (opts.noConfig) {
+    if (opts.verbose) process.stderr.write('[bcc] 使用内存默认参数，不读写配置文件\n')
+    if (opts.network) await installGlobalFetch(undefined)
+    return { config: createDefaultConfig() }
+  }
   const dataRoot = resolveDataRoot(opts.dataDir)
   setDataRoot(dataRoot)
   if (opts.verbose) process.stderr.write(`[bcc] dataRoot=${dataRoot}\n`)

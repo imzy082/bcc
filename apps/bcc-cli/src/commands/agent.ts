@@ -35,12 +35,12 @@ import { resolveOutputs, reportOutput, UsageError } from '../output.js'
 // ---------- probe ----------
 
 export async function runProbeCommand(argv: string[]): Promise<void> {
-  const { positionals } = parseArgs({ args: argv, allowPositionals: true })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { 'no-config': { type: 'boolean' } } })
   const input = positionals[0]
   if (!input || !existsSync(input)) throw new UsageError('用法: bcc probe <video>')
 
-  const { config } = await bootstrap({ network: false })
-  applyProxyEnv(config.gemini)
+  const { config } = await bootstrap({ network: false, noConfig: values['no-config'] })
+  if (!values['no-config']) applyProxyEnv(config.gemini)
 
   const videoPath = path.resolve(input)
   const info = await getVideoInfo(videoPath)
@@ -64,6 +64,7 @@ export async function runShotsCommand(argv: string[]): Promise<void> {
       'no-frames': { type: 'boolean' },
       'data-dir': { type: 'string' },
       quiet: { type: 'boolean', short: 'q' },
+      'no-config': { type: 'boolean' },
       'ffmpeg-path': { type: 'string' },
       'ffprobe-path': { type: 'string' },
     },
@@ -79,8 +80,8 @@ export async function runShotsCommand(argv: string[]): Promise<void> {
   if (values['ffprobe-path']) process.env.BCC_FFPROBE_PATH = values['ffprobe-path']
 
   const videoPath = path.resolve(input)
-  const { config } = await bootstrap({ dataDir: values['data-dir'], network: false })
-  applyProxyEnv(config.gemini) // 下载 ffmpeg/ffprobe 时尊重配置里的代理
+  const { config } = await bootstrap({ dataDir: values['data-dir'], network: false, noConfig: values['no-config'] })
+  if (!values['no-config']) applyProxyEnv(config.gemini) // 下载 ffmpeg/ffprobe 时尊重配置里的代理
   const sb = config.storyboard
   const num = (name: 'threshold' | 'hard-min' | 'hard-ratio' | 'min-gap' | 'max-shots'): number | undefined => {
     const raw = values[name]
@@ -194,6 +195,7 @@ async function exportScript(argv: string[]): Promise<void> {
       name: { type: 'string' },
       duration: { type: 'string' },
       quiet: { type: 'boolean', short: 'q' },
+      'no-config': { type: 'boolean' },
       'ffmpeg-path': { type: 'string' },
       'ffprobe-path': { type: 'string' },
     },
@@ -202,8 +204,8 @@ async function exportScript(argv: string[]): Promise<void> {
   if (values['ffmpeg-path']) process.env.BCC_FFMPEG_PATH = values['ffmpeg-path']
   if (values['ffprobe-path']) process.env.BCC_FFPROBE_PATH = values['ffprobe-path']
 
-  const { config } = await bootstrap({ network: false })
-  applyProxyEnv(config.gemini)
+  const { config } = await bootstrap({ network: false, noConfig: values['no-config'] })
+  if (!values['no-config']) applyProxyEnv(config.gemini)
 
   const text = (await fs.readFile(path.resolve(values.from), 'utf-8')).replace(/^\uFEFF/, '')
   const scenes = parseScript(text)
@@ -272,6 +274,7 @@ async function exportStoryboard(argv: string[]): Promise<void> {
       name: { type: 'string' },
       duration: { type: 'string' },
       quiet: { type: 'boolean', short: 'q' },
+      'no-config': { type: 'boolean' },
       'ffmpeg-path': { type: 'string' },
       'ffprobe-path': { type: 'string' },
     },
@@ -280,8 +283,8 @@ async function exportStoryboard(argv: string[]): Promise<void> {
   if (values['ffmpeg-path']) process.env.BCC_FFMPEG_PATH = values['ffmpeg-path']
   if (values['ffprobe-path']) process.env.BCC_FFPROBE_PATH = values['ffprobe-path']
 
-  const { config } = await bootstrap({ network: false })
-  applyProxyEnv(config.gemini)
+  const { config } = await bootstrap({ network: false, noConfig: values['no-config'] })
+  if (!values['no-config']) applyProxyEnv(config.gemini)
 
   const raw = JSON.parse((await fs.readFile(path.resolve(values.from), 'utf-8')).replace(/^\uFEFF/, '')) as AgentShotInput[] | { shots?: AgentShotInput[]; durationSec?: number; framePaths?: string[] }
   const inputs = Array.isArray(raw) ? raw : raw.shots ?? []

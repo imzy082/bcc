@@ -7,8 +7,8 @@ import {
   FinishReason,
   GoogleGenAI,
   MediaResolution,
-  ThinkingLevel,
   type File as GenaiFile,
+  type Part,
 } from '@google/genai'
 import { fetch as undiciFetch, ProxyAgent } from 'undici'
 import path from 'node:path'
@@ -43,7 +43,7 @@ export class GeminiService {
 
   constructor(private config: GeminiConfig) {
     if (!config.api_key) {
-      throw new Error('Gemini API Key 未配置，请到设置页填写')
+      throw new Error('Gemini API Key 未配置：请设置 gemini.api_key，或为 analyze 命令设置 GEMINI_API_KEY')
     }
     // SDK 用全局 fetch；我们已在 main 启动 / 配置保存时通过 installGlobalFetch 注入
     // 自定义实现（Electron net.fetch 跟随系统代理，或 undici ProxyAgent 走指定代理）。
@@ -63,6 +63,64 @@ export class GeminiService {
       return { ok: true, message: `连接成功，发现 ${models.length} 个模型`, models }
     } catch (err: any) {
       return { ok: false, message: explainNetworkError(err) }
+    }
+  }
+
+  /** 原视频分析入口；保持音轨，不转图片，失败不切换模型或输入方式。 */
+  async analyzeVideos(
+    videoPaths: string[],
+    prompt: string,
+    callbacks: GenerationCallbacks = {},
+    responseJsonSchema?: Record<string, unknown>
+  ): Promise<string> {
+    if (!videoPaths.length) throw new Error('至少需要一个视频')
+    if (!this.config.model.trim()) throw new Error('Gemini 模型 ID 不能为空')
+    const uploaded: GenaiFile[] = []
+    const parts: Part[] = [{ text: prompt }]
+    try {
+      for (const [index, videoPath] of videoPaths.entries()) {
+        this.throwIfAborted(callbacks.signal)
+        callbacks.onStatus?.('uploading', `上传原视频 ${index + 1}/${videoPaths.length} 到 Gemini`)
+        const file = await this.uploadFile(videoPath, callbacks.onUploadProgress, callbacks.signal)
+        uploaded.push(file)
+        const active = await this.waitForFileActive(file, callbacks.signal)
+        if (!active.uri || !active.mimeType?.startsWith('video/')) {
+          throw new Error('Gemini 未返回有效的视频文件引用')
+        }
+        parts.push({ text: `视频${index + 1}: ${path.basename(videoPath)}` }, {
+          fileData: { fileUri: active.uri, mimeType: active.mimeType },
+        })
+      }
+      this.throwIfAborted(callbacks.signal)
+      callbacks.onStatus?.('generating', `Gemini ${this.config.model} 正在分析视频画面与音轨`)
+      const stream = await this.client.models.generateContentStream({
+        model: this.config.model,
+        contents: [{ role: 'user', parts }],
+        config: {
+          abortSignal: callbacks.signal,
+          mediaResolution: this.config.video_resolution === 'high'
+            ? MediaResolution.MEDIA_RESOLUTION_HIGH : MediaResolution.MEDIA_RESOLUTION_LOW,
+          ...(responseJsonSchema ? { responseMimeType: 'application/json', responseJsonSchema } : {}),
+        },
+      })
+      let acc = ''
+      let reason: FinishReason | undefined
+      for await (const chunk of stream) {
+        this.throwIfAborted(callbacks.signal)
+        const delta = chunk.text ?? ''
+        acc += delta
+        reason = chunk.candidates?.[0]?.finishReason ?? reason
+        callbacks.onToken?.(acc, delta, chunk.usageMetadata?.totalTokenCount)
+      }
+      assertGeminiComplete(acc, reason)
+      if (reason !== FinishReason.STOP) throw new Error('Gemini 未返回完成标记，未保存可能不完整的内容')
+      return acc
+    } finally {
+      await Promise.all(uploaded.map(async (file) => {
+        if (!file.name) return
+        try { await this.client.files.delete({ name: file.name }) }
+        catch { callbacks.onStatus?.('cleanup', `未能删除 Gemini 临时文件 ${file.name}，请在服务端检查`) }
+      }))
     }
   }
 
@@ -145,7 +203,7 @@ export class GeminiService {
     try {
       // 2. 上传到 Gemini
       cb.onStatus?.('uploading', `上传视频到 Gemini (${compressed.outputMB.toFixed(1)} MB)...`)
-      uploadedFile = await this.uploadFile(actualPath, cb.onUploadProgress)
+      uploadedFile = await this.uploadFile(actualPath, cb.onUploadProgress, signal)
       this.throwIfAborted(signal)
 
       // 3. 等待处理 ACTIVE
@@ -183,7 +241,7 @@ export class GeminiService {
         ],
         config: {
           systemInstruction: systemPrompt || SCRIPT_SYSTEM_PROMPT,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          abortSignal: signal,
           mediaResolution: mediaRes,
         },
       })
@@ -228,7 +286,8 @@ export class GeminiService {
 
   private async uploadFile(
     filePath: string,
-    onProgress?: (percent: number) => void
+    onProgress?: (percent: number) => void,
+    signal?: AbortSignal
   ): Promise<GenaiFile> {
     // SDK 的 upload 没有原生进度事件；用文件大小推算的方式给个粗略反馈
     const stat = await fs.stat(filePath)
@@ -270,6 +329,7 @@ export class GeminiService {
         file: actualPath,
         config: {
           mimeType: detectMime(filePath),
+          abortSignal: signal,
         },
       })
       onProgress?.(1)
@@ -282,10 +342,12 @@ export class GeminiService {
 
   private async waitForFileActive(file: GenaiFile, signal?: AbortSignal): Promise<GenaiFile> {
     let f = file
+    const deadline = Date.now() + 10 * 60 * 1000
     while (f.state === 'PROCESSING') {
       this.throwIfAborted(signal)
+      if (Date.now() >= deadline) throw new Error('Gemini 视频处理超过 10 分钟，请稍后重试或缩短视频')
       await sleep(2000)
-      f = await this.client.files.get({ name: f.name! })
+      f = await this.client.files.get({ name: f.name!, config: { abortSignal: signal } })
     }
     if (f.state !== 'ACTIVE') {
       throw new Error(`视频处理失败: state=${f.state}`)
@@ -300,7 +362,7 @@ export class GeminiService {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         systemInstruction: SCRIPT_SYSTEM_PROMPT,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        abortSignal: cb.signal,
       },
     })
 

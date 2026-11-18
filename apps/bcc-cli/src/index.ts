@@ -16,6 +16,7 @@ import { runStoryboardCommand } from './commands/storyboard.js'
 import { runResearchCommand } from './commands/research.js'
 import { runProbeCommand, runShotsCommand, runMasterCommand, runExportCommand } from './commands/agent.js'
 import { UsageError } from './output.js'
+import { runAnalyzeCommand } from './commands/analyze.js'
 
 // CLI 契约：stdout 只放产物路径；service 层零散的 console.log/info（如 "[fetch] 直连"）一律改道 stderr
 console.log = console.error
@@ -30,6 +31,13 @@ const HELP = `包拆拆 CLI (bcc) v${VERSION}
   bcc <命令> [参数]
 
 命令:
+  analyze <video...> --task script|storyboard|research --out <md|json>
+      Google 官方 Gemini 视频分析（含音轨），读取 GEMINI_API_KEY 和 GEMINI_MODEL，不读写配置文件
+      --model 仅覆盖本次模型；缺少环境配置时报错，不回退内置模型
+      bcc analyze ./a.mp4 --task script --model <模型ID> --out 剧本.md
+      bcc analyze ./a.mp4 --task storyboard --out 分镜.json
+      bcc analyze a.mp4 b.mp4 --task research --out 风格指南.md
+      分析失败不降级为图片；剧本/分镜结果用 export 导出 docx/xlsx/html
   config <list|get|set|path|test>   API / 模型 / 代理设置
       bcc config list
       bcc config get gemini.api_key
@@ -64,6 +72,7 @@ Agent 模式（CLI 不调用外部模型 API，分析由 harness 的 Agent 用�
   --out, -o <file>     输出路径（按扩展名推断格式）
   --format, -f a,b     批量导出多种格式
   --data-dir <dir>     指定数据根（默认: BCC_DATA_DIR > cwd > 平台 userData）
+  --no-config         probe / shots / export 跳过配置文件读写（skill 用法；analyze 始终如此）
   --quiet, -q          静默进度
   --verbose            打印数据根等诊断
   --ffmpeg-path <path> 显式指定 ffmpeg 二进制（缺省自动解析/下载）
@@ -85,6 +94,8 @@ async function main(argv: string[]): Promise<void> {
   }
 
   switch (command) {
+    case 'analyze':
+      return runAnalyzeCommand(rest)
     case 'config':
       return runConfig(rest)
     case 'script':
